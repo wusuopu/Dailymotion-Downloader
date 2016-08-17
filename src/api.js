@@ -42,7 +42,26 @@ function parsePlayList(id, cb, page) {
 }
 
 function parseVideo(id, cb) {
+  let u = `https://api.dailymotion.com/video/${id}`;
+  request({ method: 'GET', uri: u }, (err, res, body) => {
+    if (err) {
+      return cb(err);
+    }
+    if (res.statusCode !== 200) {
+      return cb({code: res.statusCode});
+    }
+    let result;
+    try {
+      result = JSON.parse(body);
+    } catch(e) {
+      return cb(e);
+    }
 
+    if (result.error) {
+      return cb(result.error);
+    }
+    cb(null, result);
+  });
 }
 
 function parseURL(url) {

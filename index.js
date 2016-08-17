@@ -1,78 +1,99 @@
 'use strict';
 
-var fs = require('fs');
-var casper = require('casper').create({
-  //pageSettings: {
-  //  webSecurityEnabled: false
-  //},
-  //onResourceRequested: function(obj) {
-  //  console.log('onResourceRequested: ', obj.getCurrentUrl());
-  //},
-  onError: function(msg, trace) {
-    console.log('onError:', msg, trace);
+const fs = require('fs');
+const spawn = require('child_process').spawn;
+const api = require('./src/api');
+const async = require('async');
+const _ = require('lodash');
+
+const QUALITY = 480;      // 默认下载 480p 的视频
+if (process.argv.length < 3) {
+  console.log('Usage:');
+  console.log('\tnode index.js <video-url>');
+  console.log('\tnode index.js <video-id>');
+  console.log('\tnode index.js <playlist-url>');
+  process.exit(1);
+}
+
+let url = process.argv[2];
+if (!url.startsWith('http')) {
+  url = `http://dailymotion.com/video/${url}`;
+}
+
+let data = api.parseURL(url);
+if (!data.type) {
+  console.log('url is invalid');
+  process.exit(1);
+}
+
+function parseVideo(data, done) {
+  // 解析得到视频的标题，以及id
+  if (data.type === 'playlist') {
+    api.parsePlayList(data.id, done);
+  } else {
+    api.parseVideo(data.id, (err, result) => {
+      done(err, [result]);
+    });
   }
-});
-var url = casper.cli.args[0];
-if (!url) {
-  console.log('url arg needed.');
-  casper.exit(1);
 }
 
-if (! /^http/.test(url)) {
-  url = 'http://dailymotion.com/embed/video/' + url;
+function parseLink(videoID, done) {
+  // 解析得到视频的下载地址
+  let output = `${__dirname}/tmp/down-${videoID}.txt`;
+  let casper = spawn('npm', ['run', 'parse', '--', videoID, output]);
+  casper.on('close', (code) => {
+    let error = code !== 0 ? {code} : null;
+    done(error, output);
+  });
 }
-casper.start();
-// 1. 打开 embed video 播放页面
-casper
-  //.open('http://dailymotion.com/embed/video/x3os0le')
-  .open(url)
-  .thenEvaluate(function() {
-    // 2. 解析下载地址
-    var appPath = 'http://savevideo.me/';
-    var form = document.createElement("form");
-    form.setAttribute("method","post");
-    form.setAttribute("action",appPath);
-    var hiddenField = document.createElement("input");
-    hiddenField.setAttribute("type","hidden");
-    hiddenField.setAttribute("name","url");
-    hiddenField.setAttribute("value",document.location);
-    form.appendChild(hiddenField);
-    var hiddenField = document.createElement("input");
-    hiddenField.setAttribute("type","hidden");
-    hiddenField.setAttribute("name","src");
-    hiddenField.setAttribute("value",document.body.innerHTML);
-    form.appendChild(hiddenField);
-    document.body.appendChild(form);
-    form.submit();
-  })
-  .waitForUrl(/savevideo.me/)
-  .then(function() {
-    console.log('in save video site');
-  })
-  .waitForSelector('#ajaxresults .download_links p a')
-  .then(function() {
-    var id = url.split('/').slice(-1)[0];
-    var output = './tmp/' + id + '-down.txt';
-    var links = this.getElementsInfo('#ajaxresults .download_links p a');
-    var str = '';
-    for (var i in links) {
-      var href = links[i].attributes.href;
-      if (/^http/.test(href)) {
-        str +=  href + '\n';
-      }
-    }
-    if (output) {
-      try {
-        fs.write(output, str, 'w');
-      } catch(e) {
-        console.log('write error:', e);
-      }
-    } else {
-      console.log(str);
-    }
-  })
-;
 
-casper.run(function() {
-  this.echo('Done.').exit();
+function curl(url, target, done) {
+  // 使用 curl 下载视频
+  console.log('start downloading', url);
+  let curl = spawn('curl', ['-v', '-o', target, '-L', url]);
+  curl.on('close', (code) => {
+    let error = code !== 0 ? {code} : null;
+    done(error);
+  });
+}
+
+function downloadVideo(video, next) {
+  console.log(video.id, video.title);
+  async.waterfall([
+    (cb) => {
+      parseLink(video.id, cb);
+    },
+    (output, cb) => {
+      fs.readFile(output, {encoding: 'utf-8'}, cb);
+    },
+    (links, cb) => {
+      links = links.split('\n');
+      if (links.length === 0) {
+        return cb('no invalid link');
+      }
+
+      let link = links[0];
+      let pattern = new RegExp(`${QUALITY}/video`);
+      _.each(links, (l) => {
+        if (l.match(pattern)) {
+          link = l;
+        }
+      });
+
+      let target = `${__dirname}/download/${video.id}-${video.title}.mp4`;
+      curl(link, target, cb);
+    }
+  ], (error) => {
+    error ? console.log('download error: ', video.id, error) : console.log('download finish.', video.id);
+    return next(error);
+  });
+}
+
+parseVideo(data, (err, result) => {
+  if (err) {
+    console.log(err);
+    process.exit(2);
+  }
+  async.eachLimit(result, 2, downloadVideo, (err) => {
+  });
 });
