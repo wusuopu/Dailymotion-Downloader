@@ -1,0 +1,10 @@
+web:
+  image: nginx
+  environment:
+    - NGINX_PORT=80
+  ports:
+    - "8090:80"
+  volumes:
+    - ./download:/usr/share/nginx/html
+  command: nginx -g 'daemon off;'
+

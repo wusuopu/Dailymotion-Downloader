@@ -5,6 +5,8 @@ const spawn = require('child_process').spawn;
 const api = require('./src/api');
 const async = require('async');
 const _ = require('lodash');
+const request = require('request');
+const Curl = require('node-libcurl').Curl;
 
 const QUALITY = 480;      // 默认下载 480p 的视频
 if (process.argv.length < 3) {
@@ -47,15 +49,45 @@ function parseLink(videoID, done) {
   });
 }
 
-function curl(url, target, done) {
-  // 使用 curl 下载视频
-  console.log('start downloading', url);
-  let curl = spawn('curl', ['-v', '-o', target, '-L', url]);
-  curl.on('close', (code) => {
-    let error = code !== 0 ? {code} : null;
-    done(error);
+function curlDownload(url, target, done) {
+  let curl = new Curl();
+  let fd = fs.createWriteStream(target);
+  let totalLength = 0;
+  let downloaded = 0;
+
+  curl.setOpt('URL', url);
+  curl.setOpt('FOLLOWLOCATION', true );
+
+  curl.on( 'end', function( statusCode, body, headers ) {
+    console.log('curl on end');
+    curl.close();
+    fd.end();
+    done();
   });
+  curl.on('data', function(chunk) {
+    if (chunk.length > 0) {
+      downloaded += chunk.length;
+      fd.write(chunk, 'binary');
+      console.log(`download: ${target} ${downloaded} / ${totalLength}`);
+    }
+  });
+  curl.on('header', function(chunk) {
+    let header = chunk.toString().trim().split(': ');
+    if (header[0] === 'Content-Length') {
+      totalLength = parseInt(header[1], 10);
+    }
+  });
+  curl.on('error', function(err) {
+    console.log('curl on error', err);
+    curl.close();
+    fd.end();
+    fs.unlinkSync(target);
+    done(err);
+  });
+
+  curl.perform();
 }
+
 
 function downloadVideo(video, next) {
   console.log(video.id, video.title);
@@ -81,7 +113,7 @@ function downloadVideo(video, next) {
       });
 
       let target = `${__dirname}/download/${video.id}-${video.title}.mp4`;
-      curl(link, target, cb);
+      curlDownload(link, target, cb);
     }
   ], (error) => {
     error ? console.log('download error: ', video.id, error) : console.log('download finish.', video.id);
@@ -94,6 +126,6 @@ parseVideo(data, (err, result) => {
     console.log(err);
     process.exit(2);
   }
-  async.eachLimit(result, 2, downloadVideo, (err) => {
+  async.eachLimit(result, 1, downloadVideo, (err) => {
   });
 });
