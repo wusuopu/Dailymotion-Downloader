@@ -58,12 +58,12 @@ function curlDownload(url, target, done) {
   curl.setOpt('URL', url);
   curl.setOpt('FOLLOWLOCATION', true );
 
-  curl.on( 'end', function( statusCode, body, headers ) {
+  curl._onEnd = function() {
     console.log('curl on end');
     curl.close();
     fd.end();
     done();
-  });
+  };
   curl.on('data', function(chunk) {
     if (chunk.length > 0) {
       downloaded += chunk.length;
